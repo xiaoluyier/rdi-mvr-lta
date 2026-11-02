@@ -1,0 +1,18 @@
+toplevel "P3_SysFail";
+
+"P3_SysFail" and "P3_Prim_Fail" "No_Backup";
+
+"P3_Prim_Fail" and "P3_UAV1" "P3_UAV2" "P3_UAV3" "P3_UAV4";
+"Backup_Fail" and "Backup_UAV1" "Backup_UAV2" "Backup_UAV3";
+"Contention" pand "Pk_UAV" "P3_Prim_Fail";
+
+"No_Backup" or "Backup_Fail" "Contention";
+
+"P3_UAV1" fail~exponential(0.0002) repair~dirac(99999999.0);
+"P3_UAV2" fail~exponential(0.0002) repair~dirac(99999999.0);
+"P3_UAV3" fail~exponential(0.0002) repair~dirac(99999999.0);
+"P3_UAV4" fail~exponential(0.0002) repair~dirac(99999999.0);
+"Backup_UAV1" fail~exponential(0.00005) repair~dirac(99999999.0);
+"Backup_UAV2" fail~exponential(0.00005) repair~dirac(99999999.0);
+"Backup_UAV3" fail~exponential(0.00005) repair~dirac(99999999.0);
+"Pk_UAV" fail~exponential(0.0005) repair~dirac(99999999.0);

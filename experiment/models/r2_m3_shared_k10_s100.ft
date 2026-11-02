@@ -1,0 +1,24 @@
+toplevel "TOP";
+
+"TOP" or "G1" "G2" "G3";
+
+"G1" and "A" "G1_OR" "D";
+"G1_OR" or "B" "C";
+
+"G2" pand "G2_AND" "G2_OR";
+"G2_AND" and "A" "E";
+"G2_OR" or "F" "G";
+
+"G3" and "E" "G3_OR" "J";
+"G3_OR" or "H" "I";
+
+"A" fail~exponential(3.162277660168e-07) repair~exponential(1.000000000000e-12);
+"B" fail~exponential(1.000000000000e-06) repair~exponential(1.000000000000e-12);
+"C" fail~exponential(1.000000000000e-07) repair~exponential(1.000000000000e-12);
+"D" fail~exponential(3.162277660168e-07) repair~exponential(1.000000000000e-12);
+"E" fail~exponential(3.162277660168e-07) repair~exponential(1.000000000000e-12);
+"F" fail~exponential(1.000000000000e-06) repair~exponential(1.000000000000e-12);
+"G" fail~exponential(3.162277660168e-07) repair~exponential(1.000000000000e-12);
+"H" fail~exponential(1.000000000000e-06) repair~exponential(1.000000000000e-12);
+"I" fail~exponential(1.000000000000e-07) repair~exponential(1.000000000000e-12);
+"J" fail~exponential(1.000000000000e-07) repair~exponential(1.000000000000e-12);

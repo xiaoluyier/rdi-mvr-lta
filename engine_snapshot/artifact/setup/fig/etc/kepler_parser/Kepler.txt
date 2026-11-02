@@ -1,0 +1,84 @@
+// Kepler grammar for repairable DFTs
+//
+// This is a textual, human-readable syntax to describe Fault Trees
+// with dynamic gates (PAND, SPARE, FDEP) and repairs (RBOX).
+//
+// Outline of an FT with a given TLE:
+//  - The first line is 'toplevel <TLE_name>;'
+//  - Each subsequent line is either empty, or it describes a node in the FT
+//  - A node is written as '<node_name> <list-of-node-properties>;'
+//
+// Remarks:
+//  - to define the Kepler grammar, we use standard BNF notation
+//  - grammar symbols are capitalised words between carets, e.g. <THIS>
+//  - literals are charaters between single quotation marks, e.g. ';' and ' '
+//  - literal ';' assumes a newline after the semicolon
+//  - we also formalise and support the (legacy) Galileo standard syntax
+
+
+<TOPLEVEL> ::= 'toplevel' <NAME> ';' <KEPLER>
+
+// Kepler syntax
+
+ <KEPLER> ::= <GATE>
+            | <BE>
+            | <SBE> 
+            | <GALILEO>
+            | <KEPLER> <KEPLER>
+   <GATE> ::= <NAME> 'or'    <NAMES> ';'
+            | <NAME> 'and'   <NAMES> ';'
+            | <NAME>  <VOT>  <NAMES> ';'
+            | <NAME> 'pand'  <NAMES> ';'
+            | <NAME> 'fdep'  <NAMES> ';'
+            | <NAME> 'spare' <NAMES> ';'
+            | <NAME> 'rbox'  <RMODE> <NAMES> ';'
+     <BE> ::= <NAME> <FAIL> ';'
+            | <NAME> <FAIL> <REP> ';'
+    <SBE> ::= <NAME> <DORM> <FAIL> ';'
+            | <NAME> <DORM> <FAIL> <REP> ';'
+  <RMODE> ::= 'prio' | 'fcfs' | 'rand'
+   <FAIL> ::= 'fail'   '~' <DIST>
+    <REP> ::= 'repair' '~' <DIST>
+   <DORM> ::= 'dorm'   '~' <DIST>
+            
+// Galileo syntax (https://dftbenchmarks.utwente.nl/galileo.html)
+
+ <GALILEO> ::= <GGATE>
+             | <GBE>
+             | <GALILEO> ';' <GALILEO>           // ... Galileo Figaro
+   <GGATE> ::= <NAME> 'seq' <NAMES> ';'
+             | <NAME> 'csp' <NAMES> ';'
+             | <NAME> 'wsp' <NAMES> ';'
+             | <NAME> 'hsp' <NAMES> ';'
+     <GBE> ::= <NAME> <GFAIL> ';'
+             | <NAME> <GFAIL> <GDORM> ';'
+             | <NAME> <GDORM> <GFAIL> ';'
+   <GFAIL> ::= 'lambda' '=' <PREAL>
+             | 'prob'   '=' <PROB>
+             | 'res'    '=' <PROB>
+             | 'rate =' <PREAL>  'shape =' <PREAL>
+             | 'mean =' <REAL>  'stddev =' <PREAL>
+   <GDORM> ::= 'dorm =' <PROB>
+
+// Basic
+
+ <NAMES> ::= <NAME> | <NAME>' '<NAMES>
+  <NAME> ::= '"' <ALNUM> '"'
+   <VOT> ::= <NAT>'of'<NAT>
+  <DIST> ::= 'exponential' '(' <PREAL> ')'
+           | 'Erlang'      '(' <PREAL> ',' <NAT>   ')'
+           | 'uniform'     '(' <REAL>  ',' <REAL>  ')'
+           | 'normal'      '(' <REAL>  ',' <PREAL> ')'
+           | 'lognormal'   '(' <REAL>  ',' <PREAL> ')'
+           | 'gamma'       '(' <PREAL> ',' <PREAL> ')'
+           | 'Weibull'     '(' <PREAL> ',' <PREAL> ')'
+           | 'Rayleigh'    '(' <PREAL> ')'
+  <PROB> ::= '0' | '1' | '0.'<NAT>
+  <REAL> ::= <SGN><PREAL>
+   <INT> ::= <SGN><NAT>
+ <PREAL> ::= <NAT> | <NAT>'.'<NAT> | <NAT>'e'<INT>
+   <NAT> ::= <NUM> | <NUM><NAT>
+ <ALNUM> ::= <ALPHA> | <NUM> | <NUM><ALNUM> | <ALPHA><ALNUM> 
+ <ALPHA> ::= 'A' | 'B' | ... | 'Z' | 'a' | 'b' | ... | 'z' | '_'
+   <NUM> ::= '0' | '1' | ... | '9'
+   <SGN> ::= '+' | '-' | ''

@@ -1,0 +1,7 @@
+{
+  "after_sha256": "ae2ba67f6dbcbdc4bb41be6034909a056e1a1b10a4ba64f965b157504a8fcaa9",
+  "backup_path": "/root/run_artifact3/artifact/setup/fig/src/SimulationEngineSFE.cpp.xiwang_legacy.a89f7fff6314412ed453e9e11e6ec7b43423b877cf8fa14af9f2338a8847b78c.bak",
+  "before_sha256": "a89f7fff6314412ed453e9e11e6ec7b43423b877cf8fa14af9f2338a8847b78c",
+  "header_path": "/root/run_artifact3/artifact/setup/fig/include/XiWangPopulationPlan.h",
+  "source_path": "/root/run_artifact3/artifact/setup/fig/src/SimulationEngineSFE.cpp"
+}

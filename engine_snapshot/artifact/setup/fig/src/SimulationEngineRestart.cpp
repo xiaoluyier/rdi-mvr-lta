@@ -1,0 +1,640 @@
+//==============================================================================
+//
+//  SimulationEngineRestart.cpp
+//
+//  Copyleft 2016-
+//  Authors:
+//  - Carlos E. Budde <cbudde@famaf.unc.edu.ar> (Universidad Nacional de Córdoba)
+//
+//------------------------------------------------------------------------------
+//
+//  This file is part of FIG.
+//
+//  The Finite Improbability Generator (FIG) project is free software;
+//  you can redistribute it and/or modify it under the terms of the GNU
+//  General Public License as published by the Free Software Foundation;
+//  either version 3 of the License, or (at your option) any later version.
+//
+//  FIG is distributed in the hope that it will be useful,
+//	but WITHOUT ANY WARRANTY; without even the implied warranty of
+//	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+//	GNU General Public License for more details.
+//
+//	You should have received a copy of the GNU General Public License
+//	along with FIG; if not, write to the Free Software Foundation,
+//	Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+//
+//==============================================================================
+
+
+// C
+#include <cmath>
+// C++
+#include <stack>
+#include <deque>
+#include <typeinfo>
+#include <iterator>
+#include <algorithm>   // std::fill
+#include <functional>  // std::functional<>
+// FIG
+#include <SimulationEngineRestart.h>
+#include <FigLog.h>
+#include <FigException.h>
+#include <ModuleNetwork.h>
+#include <TraialPool.h>
+#include <FigException.h>
+#include <PropertyRate.h>
+#include <PropertyTBoundSS.h>
+#include <PropertyTransient.h>
+
+
+using namespace std::placeholders;  // _1, _2, _3, ...
+
+
+// ADL
+using std::begin;
+using std::end;
+using std::pow;
+
+
+namespace fig  // // // // // // // // // // // // // // // // // // // // // //
+{
+
+// Available engine names in SimulationEngine::names
+SimulationEngineRestart::SimulationEngineRestart(
+    std::shared_ptr<const ModuleNetwork> model,
+    bool thresholds,
+    bool resampling) :
+		SimulationEngine("restart", model, thresholds, resampling),
+        dieOutDepth_(0u),
+        oTraial_(TraialPool::get_instance().get_traial()),
+        currentSimLength_(0.0),
+        useStateSplit_(false),
+        peakActiveParticles_(0u),
+        offspringCountSum_(0.0),
+        offspringEventCount_(0u),
+        splitLevelsCrossedSum_(0.0),
+        splitLevelEventCount_(0u),
+        multiLevelSplitEventCount_(0u),
+        maxSplitLevelsCrossed_(0u),
+        poolCapacity_(0u)
+{
+	if (thresholds)
+		throw_FigException("RESTART engine has not yet been implemented "
+		                   "to use for building thresholds");
+	/* Not much to do around here */
+}
+
+
+SimulationEngineRestart::~SimulationEngineRestart()
+{
+	//TraialPool::get_instance().return_traials(ssstack_);
+	// ^^^ pointless, and besides the TraialPool might be dead already,
+	//     so this would trigger a re-creation of the pool or something worse
+}
+
+
+const std::string&
+SimulationEngineRestart::name() const noexcept
+{
+	static std::string name;
+	name = SimulationEngine::name();
+	name += die_out_depth() > 0 ? std::to_string(die_out_depth()) : std::string("");
+	return name;
+}
+
+
+void
+SimulationEngineRestart::bind(std::shared_ptr< const ImportanceFunction > ifun_ptr)
+{
+	if (ifun_ptr->strategy() == "")
+		throw_FigException("ImportanceFunction doesn't seem to have "
+						   "internal importance information");
+	else if (ifun_ptr->strategy() == "flat")
+		throw_FigException("RESTART simulation engine requires an importance "
+						   "building strategy other than \"flat\"");
+	SimulationEngine::bind(ifun_ptr);
+	minImportance_ = ifun_ptr->min_value(true);
+	maxImportance_ = ifun_ptr->max_value(true);
+}
+
+
+void
+SimulationEngineRestart::unbind()
+{
+	minImportance_ = static_cast<ImportanceValue>(0);
+	maxImportance_ = static_cast<ImportanceValue>(0);
+	splitFun_.reset();
+	useStateSplit_ = false;
+	SimulationEngine::unbind();
+}
+
+
+void
+SimulationEngineRestart::set_die_out_depth(unsigned dieOutDepth)
+{
+	if (locked())
+		throw_FigException("engine \"" + name() + "\" is currently locked "
+		                   "in \"simulation mode\"");
+	dieOutDepth_ = static_cast<decltype(dieOutDepth_)>(dieOutDepth);
+}
+
+
+void
+SimulationEngineRestart::set_split_formula(const std::string& splitFormula,
+	                                       const State<STATE_INTERNAL_TYPE>& globalState)
+{
+	if (locked())
+		throw_FigException("engine \"" + name() + "\" is currently locked "
+		                   "in \"simulation mode\"");
+	if (splitFormula.empty()) {
+		splitFun_.reset();
+		useStateSplit_ = false;
+		return;
+	}
+	auto allVarnames = globalState.varnames();
+	auto allPositions = model_->clock_positions();
+	allPositions.reserve(allPositions.size() + allVarnames.size());
+	for (size_t i = 0u ; i < allVarnames.size() ; ++i)
+		allPositions.emplace(allVarnames[i], i);
+	const auto stateSize = globalState.size();
+	const auto allClocks = model_->clocks();
+	allVarnames.reserve(allVarnames.size() + allClocks.size());
+	for (size_t i = 0u ; i < allClocks.size() ; ++i) {
+		const auto& clkName = allClocks[i].get().name();
+		allVarnames.emplace_back(clkName);
+		allPositions[clkName] = stateSize + i;
+	}
+	splitFun_.set(splitFormula, allVarnames, allPositions);
+	useStateSplit_ = true;
+}
+
+
+void
+SimulationEngineRestart::reset() const
+{
+	SimulationEngine::reset();
+	reinit_stack();
+}
+
+
+void
+SimulationEngineRestart::reinit_stack() const
+{
+	static TraialPool& tpool(TraialPool::get_instance());
+	while (!ssstack_.empty()) {
+		if (&ssstack_.top().get() != &oTraial_)  // avoid future aliasing!
+			tpool.return_traial(std::move(ssstack_.top()));
+		ssstack_.pop();
+	}
+	ssstack_.push(oTraial_);
+}
+
+
+using TraialCopier = std::function< void (std::stack< Reference<Traial> >&,
+                                          const Traial&,
+                                          unsigned,
+                                          short) >;
+template<> bool
+SimulationEngineRestart::handle_lvl_up(
+    Traial& traial,
+    TraialCopier copy_traials,
+    std::stack< Reference < Traial > >& stack) const
+{
+	const decltype(traial.level)& nLvlCross = traial.numLevelsCrossed;
+	const auto previousLvl = traial.level - nLvlCross;
+	unsigned long prevEffort(1ul), currEffort(1ul);
+
+	assert(0 < traial.level);
+	assert(0 < nLvlCross);
+	assert(traial.level >= nLvlCross);
+	assert(useStateSplit_ ? traial.depth <= 0 : traial.depth < 0);
+	note_split_levels(static_cast<size_t>(nLvlCross));
+
+	if (useStateSplit_) {
+		if (static_cast<int>(traial.level) < traial.nextSplitLevel)
+			return false;
+		const auto totalOffspring = state_split_count(traial.state, traial.clocks_values());
+		note_offspring(totalOffspring);
+		traial.weight /= static_cast<double>(totalOffspring);
+		traial.depth = 0;
+		if (1ul < totalOffspring) {
+			copy_traials(stack,
+			             traial,
+			             static_cast<unsigned>(totalOffspring-1ul),
+			             static_cast<short>(0));
+		}
+		return true;
+	}
+
+	// Could have gone up several thresholds => split accordingly
+	for (auto i = 1ul ; i <= nLvlCross ; i++) {
+		if (static_cast<int>(previousLvl+i) < traial.nextSplitLevel)
+			return false;  // no splitting to do: skip this level
+		assert(impFun_->max_value() >= previousLvl+i);
+		prevEffort *= currEffort;
+		currEffort = impFun_->effort_of(previousLvl+i);
+		assert(1ul < currEffort);
+		note_offspring(currEffort);
+		copy_traials(stack,
+		             traial,
+		             static_cast<uint>(prevEffort*(currEffort-1)),
+					 static_cast<short>(i-nLvlCross));
+	}
+	return true;
+}
+
+
+unsigned long
+SimulationEngineRestart::state_split_count(
+	const StateInstance& state,
+	const decltype(std::declval<Traial>().clocks_values())& clocks) const
+{
+	if (!useStateSplit_)
+		return 1ul;
+	const auto value = static_cast<double>(splitFun_(state, clocks));
+	if (std::isnan(value) || std::isinf(value))
+		throw_FigException("state-dependent split formula evaluated to a non-finite value");
+	return std::max<unsigned long>(1ul, static_cast<unsigned long>(std::floor(value)));
+}
+
+
+void
+SimulationEngineRestart::reset_run_metrics() const
+{
+	peakActiveParticles_ = 0u;
+	offspringCountSum_ = 0.0;
+	offspringEventCount_ = 0u;
+	splitLevelsCrossedSum_ = 0.0;
+	splitLevelEventCount_ = 0u;
+	multiLevelSplitEventCount_ = 0u;
+	maxSplitLevelsCrossed_ = 0u;
+	poolCapacity_ = 0u;
+}
+
+
+void
+SimulationEngineRestart::note_active_particles(size_t activeParticles) const
+{
+	peakActiveParticles_ = std::max(peakActiveParticles_, activeParticles);
+}
+
+
+void
+SimulationEngineRestart::note_offspring(unsigned long totalOffspring) const
+{
+	offspringCountSum_ += static_cast<double>(totalOffspring);
+	++offspringEventCount_;
+}
+
+
+void
+SimulationEngineRestart::note_split_levels(size_t levelsCrossed) const
+{
+	splitLevelsCrossedSum_ += static_cast<double>(levelsCrossed);
+	++splitLevelEventCount_;
+	if (levelsCrossed > 1u)
+		++multiLevelSplitEventCount_;
+	maxSplitLevelsCrossed_ = std::max(maxSplitLevelsCrossed_, levelsCrossed);
+}
+
+
+void
+SimulationEngineRestart::flush_run_metrics() const
+{
+	poolCapacity_ = TraialPool::get_instance().num_resources() + peakActiveParticles_;
+	figTechLog << "   · Peak active particles: " << peakActiveParticles_ << "\n";
+	figTechLog << "   · Average offspring count: "
+	           << (offspringEventCount_ > 0u ? offspringCountSum_ / static_cast<double>(offspringEventCount_) : 1.0)
+	           << "\n";
+	figTechLog << "   · Average split levels crossed: "
+	           << (splitLevelEventCount_ > 0u ? splitLevelsCrossedSum_ / static_cast<double>(splitLevelEventCount_) : 0.0)
+	           << "\n";
+	figTechLog << "   · Multi-level split events: " << multiLevelSplitEventCount_ << "\n";
+	figTechLog << "   · Max split levels crossed: " << maxSplitLevelsCrossed_ << "\n";
+	figTechLog << "   · Traial pool capacity: " << poolCapacity_ << "\n";
+}
+
+
+std::vector<double>
+SimulationEngineRestart::transient_simulations(const PropertyTransient& property,
+											   const size_t& numRuns) const
+{
+	assert(0u < numRuns);
+	const unsigned numThresholds(impFun_->num_thresholds());
+	std::vector< double > raresCount(numThresholds+1, 0.0);
+	std::vector< double > weighedRaresCount(numRuns, 0.0);
+	std::stack< Reference< Traial > > stack;
+	TraialPool& tpool(TraialPool::get_instance());
+
+	if (die_out_depth() > 0)
+		throw_FigException("There is no support yet for transient analysis "
+		                   "using RESTART with prolonged retrials (requested "
+		                   "RESTART-P" +std::to_string(die_out_depth())+
+						   ") - Aborting estimations");
+
+	// For efficiency (sigh) distinguish when operating with a concrete ifun
+	EventWatcher watch_events = impFun_->concrete_simulation()
+	        ? std::bind(&SimulationEngineRestart::transient_event_concrete, this, _1, _2, _3)
+	        : std::bind(&SimulationEngineRestart::transient_event,          this, _1, _2, _3);
+
+	// For efficiency (sigh) define here whether we resample upon splitting
+	TraialCopier copy_traials = resampleOnSplit_
+	        ? std::bind(&TraialPool::get_traial_copies<decltype(stack)>, &tpool, _1, _2, _3, _4)
+	        : std::bind(&TraialPool::get_traial_clones<decltype(stack)>, &tpool, _1, _2, _3, _4);
+
+	// Perform 'numRuns' independent RESTART simulations
+	reset_run_metrics();
+	for (size_t i = 0ul ; i < numRuns && !interrupted ; i++) {
+
+		std::fill(begin(raresCount), end(raresCount), 0.0);  // reset counts
+		tpool.get_traials(stack, 1u);
+		stack.top().get().initialise(*model_, *impFun_);
+
+		// RESTART importance-splitting simulation:
+		while (!stack.empty() && !interrupted) {
+			note_active_particles(stack.size());
+			Event e(EventType::NONE);
+			Traial& traial = stack.top();
+			assert(traial.level <= numThresholds);
+			reachCount_[traial.level]++;
+
+			// Check whether we're standing on a rare event first
+			watch_events(property, traial, e);
+			if (IS_RARE_EVENT(e)) {
+				// We are? Then count and kill
+				raresCount[traial.level+traial.depth] += traial.weight;
+				// ^^^ count in Traial's creation level; see Villen-Altamirano
+				//     "RESTART method for the case where rare events can occur
+				//      in retrials from any threshold" (1998)
+				tpool.return_traial(std::move(traial));
+				stack.pop();
+				continue;
+			}
+			// We aren't? Then keep dancing
+			e = model_->simulation_step(traial, property, watch_events);
+
+			// The following events are treated as mutually exclusive
+			// Checking order is relevant!
+			if (IS_STOP_EVENT(e) || IS_THR_DOWN_EVENT(e)) {
+				// Traial reached a stop event or went down => kill it
+				tpool.return_traial(std::move(traial));  // alternative way: tpool.return_traial(stack.top());
+				stack.pop();
+
+			} else if (IS_THR_UP_EVENT(e) && !IS_RARE_EVENT(e)) {
+				// Could have gone up several thresholds => split accordingly
+				assert(traial.numLevelsCrossed > 0);
+				if (handle_lvl_up(traial, copy_traials, stack)) {
+					// we actually used the splitting mechanism
+					traial.nextSplitLevel = static_cast<decltype(traial.nextSplitLevel)>(traial.level+1);
+					// Offsprings are on top of stack now: continue attending them
+				}
+			}
+			// RARE events are checked first thing in next iteration
+		}
+
+		// Save weighed RE counts of this run, downscaling the # of RE observed
+		// by the relative importance of the threshold level they belong to
+		weighedRaresCount[i] = aggregate_estimates(raresCount, numThresholds);
+
+		assert(!std::isnan(weighedRaresCount.back()));
+		assert(!std::isinf(weighedRaresCount.back()));
+		assert(0.0 <= weighedRaresCount.back());
+	}
+	// Return any Traial still on the loose
+	tpool.return_traials(stack);
+	flush_run_metrics();
+
+	return weighedRaresCount;
+}
+
+
+double
+SimulationEngineRestart::rate_simulation(const PropertyRate& property,
+										 const size_t& runLength,
+										 bool reinit) const
+{
+	assert(0u < runLength);
+
+	// Reset batch or run with batch means?
+	reset_run_metrics();
+	if (reinit || ssstack_.empty()) {
+		reinit_stack();
+		assert(ssstack_.size() == 1ul);
+		assert(&oTraial_ == &ssstack_.top().get());
+		oTraial_.initialise(*model_, *impFun_);
+	} else {
+		// Batch means, but reset life times
+		const auto BATCH_SIZE = ssstack_.size();
+		std::stack< Reference< Traial > > tmp;
+		while (!ssstack_.empty()) {
+			ssstack_.top().get().lifeTime = 0.0;
+			tmp.push(std::move(ssstack_.top()));
+			ssstack_.pop();
+			assert(tmp.size()+ssstack_.size() == BATCH_SIZE);
+		}
+		while (!tmp.empty()) {
+			ssstack_.push(std::move(tmp.top()));
+			tmp.pop();
+			assert(tmp.size()+ssstack_.size() == BATCH_SIZE);
+		}
+	}
+
+	// For the sake of efficiency, distinguish when operating with a concrete ifun
+	const EventWatcher& watch_events = impFun_->concrete_simulation()
+			? std::bind(&SimulationEngineRestart::rate_event_concrete, this, _1, _2, _3)
+			: std::bind(&SimulationEngineRestart::rate_event,          this, _1, _2, _3);
+	const EventWatcher& register_time = impFun_->concrete_simulation()
+			? std::bind(&SimulationEngineRestart::count_time_concrete, this, _1, _2, _3)
+			: std::bind(&SimulationEngineRestart::count_time,          this, _1, _2, _3);
+
+	// Run a single RESTART importance-splitting simulation for "runLength"
+	// simulation time units and starting from the last saved ssstack_,
+	// or from the system's initial state if requested.
+	simsLifetime = static_cast<CLOCK_INTERNAL_TYPE>(runLength);
+	const auto result = RESTART_run(property, watch_events, register_time);
+	flush_run_metrics();
+	return result;
+}
+
+
+double
+SimulationEngineRestart::tbound_ss_simulation(const PropertyTBoundSS& property) const
+{
+	const auto transientTime = property.tbound_low();
+	const auto runLength = property.tbound_upp();
+	assert(0 <= transientTime);
+	assert(transientTime < runLength);
+
+	// For efficiency (sigh) distinguish when operating with a concrete ifun
+	const EventWatcher& watch_events = impFun_->concrete_simulation()
+			? std::bind(&SimulationEngineRestart::rate_event_concrete, this, _1, _2, _3)
+			: std::bind(&SimulationEngineRestart::rate_event,          this, _1, _2, _3);
+	const EventWatcher& register_time = impFun_->concrete_simulation()
+			? std::bind(&SimulationEngineRestart::count_time_concrete, this, _1, _2, _3)
+			: std::bind(&SimulationEngineRestart::count_time,          this, _1, _2, _3);
+	EventWatcher discard_transient =
+			std::bind(&SimulationEngineRestart::kill_time,             this, _1, _2, _3);
+
+	// Run a single RESTART simulation:
+	reset_run_metrics();
+	reinit_stack();
+	assert(ssstack_.size() == 1ul);
+	assert(&oTraial_ == &ssstack_.top().get());
+	oTraial_.initialise(*model_, *impFun_);
+
+	// - first discard transient phase
+	simsLifetime = static_cast<CLOCK_INTERNAL_TYPE>(transientTime);
+	model_->simulation_step(oTraial_, property, discard_transient);
+	assert(ssstack_.size() == 1ul);
+	assert(&oTraial_ == &ssstack_.top().get());
+	assert(oTraial_.lifeTime >= transientTime);
+	if (nullptr != fig_cli::traceDump)
+		(*fig_cli::traceDump) << "\n\nEnd of (user-defined) transient phase\n";
+
+	// - and then register (time of) property satisfaction up to finishTime,
+	//   using (a single run of) the RESTART importance splitting algorithm
+	simsLifetime = static_cast<CLOCK_INTERNAL_TYPE>(runLength-transientTime);
+	const auto result = RESTART_run(property, watch_events, register_time);
+	flush_run_metrics();
+	return result;
+}
+
+
+template< class SSProperty >
+double
+SimulationEngineRestart::RESTART_run(const SSProperty& property,
+									 const EventWatcher& watch_events,
+									 const EventWatcher& register_time) const
+{
+	const unsigned numThresholds(impFun_->num_thresholds());
+	std::vector< double > raresCount(numThresholds+1, 0.0);
+	TraialPool& tpool(TraialPool::get_instance());
+
+	// For efficiency (sigh) define here whether we resample upon splitting
+	TraialCopier copy_traials = resampleOnSplit_
+	        ? std::bind(&TraialPool::get_traial_copies<decltype(ssstack_)>, &tpool, _1, _2, _3, _4)
+	        : std::bind(&TraialPool::get_traial_clones<decltype(ssstack_)>, &tpool, _1, _2, _3, _4);
+
+	// Run a single RESTART simulation for this->simsLifeTime
+	// simulation time units and starting from the last saved ssstack_,
+	// or from the system's initial state if requested.
+	while (!ssstack_.empty() && !interrupted) {
+		note_active_particles(ssstack_.size());
+		Event e(EventType::NONE);
+		Traial& traial = ssstack_.top();
+		assert(traial.level <= numThresholds);
+		reachCount_[traial.level]++;
+#ifndef NDEBUG
+		if (&traial == &oTraial_ && ssstack_.size() > 1ul) {
+			std::stringstream errMsg;
+			errMsg << "[ERROR] Aliasing!!! Traials stack size: " << ssstack_.size()
+				   << " | State of \"original Traial\" from batch means: ";
+			oTraial_.print_out(errMsg);
+			throw_FigException(errMsg.str());
+		}
+#endif
+
+		// Check whether we're standing on a rare event
+		watch_events(property, traial, e);
+		if (IS_RARE_EVENT(e)) {
+			// We are? Then register rare time
+			assert(property.is_rare(traial.state));
+			assert(impFun_->importance_of(traial.state) > static_cast<ImportanceValue>(0)
+				   || impFun_->strategy() == "adhoc");
+			const auto rareEventLevel = traial.level + (traial.depth > 0 ? traial.depth : 0);
+			// ^^^ count rare-time in Traial's last going-up level
+			currentSimLength_ = traial.lifeTime;  // reduce fp prec. loss
+			traial.lifeTime = 0.0;
+			model_->simulation_step(traial, property, register_time);
+			assert(static_cast<CLOCK_INTERNAL_TYPE>(0.0) < traial.lifeTime);
+			traial.lifeTime = std::min(traial.lifeTime, simsLifetime-currentSimLength_);
+			raresCount[rareEventLevel] += static_cast<double>(traial.lifeTime) * traial.weight;
+			traial.lifeTime += currentSimLength_;
+		}
+
+		// Check where are we and whether we should do another sprint
+		if (!watch_events(property, traial, e))
+			e = model_->simulation_step(traial, property, watch_events);
+
+		// Checking order of the following events is relevant!
+		if (traial.lifeTime >= simsLifetime || IS_THR_DOWN_EVENT(e)) {
+			// Traial reached EOS or went down => kill it
+			assert(!(&traial==&oTraial_ && IS_THR_DOWN_EVENT(e)));
+			assert(&traial != &oTraial_ || ssstack_.size() == 1ul);
+			if (&traial != &oTraial_)  // avoid future aliasing!
+				tpool.return_traial(std::move(traial));
+			ssstack_.pop();
+
+		} else if (IS_THR_UP_EVENT(e) && !IS_RARE_EVENT(e)) {
+			// Could have gone up several thresholds => split accordingly
+			assert(traial.numLevelsCrossed > 0);
+			if (handle_lvl_up(traial, copy_traials, ssstack_)) {
+				// we actually used the splitting mechanism
+				traial.nextSplitLevel = static_cast<decltype(traial.nextSplitLevel)>(traial.level+1);
+				// Offsprings are on top of ssstack_ now: continue attending them
+				assert(&(ssstack_.top().get()) != &oTraial_);
+			}
+		}
+		// RARE events are checked first thing in next iteration
+	}
+	if (ssstack_.empty())  // enable next iteration of batch means
+		ssstack_.push(oTraial_);
+
+	return aggregate_estimates(raresCount, numThresholds);
+}
+
+// SimulationEngineRestart::RESTART_run can only be invoked
+// with the following "DerivedProperties"
+template
+double SimulationEngineRestart::RESTART_run(const PropertyRate&, const EventWatcher&, const EventWatcher&) const;
+template
+double SimulationEngineRestart::RESTART_run(const PropertyTBoundSS&, const EventWatcher&, const EventWatcher&) const;
+
+
+template< typename Numeric >
+double
+SimulationEngineRestart::aggregate_estimates(const std::vector<Numeric>& raresCount,
+											 unsigned numThresholds) const
+{
+	static_assert(std::is_arithmetic<Numeric>::value,
+				  "ERROR: raresCount vector must contain numbers");
+	assert(0u < numThresholds);
+	assert(raresCount.size() >= numThresholds);
+	if (useStateSplit_) {
+		double weighedAccTime = 0.0;
+		for (auto t = 0u ; t <= numThresholds ; t++)
+			weighedAccTime += static_cast<double>(raresCount[t]);
+		assert(!std::isnan(weighedAccTime));
+		assert(!std::isinf(weighedAccTime));
+		assert(0.0 <= weighedAccTime);
+		return weighedAccTime;
+	}
+	const double N = std::round(numThresholds);
+	double weighedAccTime = 0.0,
+		   effort = 1.0;
+	for (auto t = 0u ; t <= N ; t++) {
+		effort *= impFun_->effort_of(t);
+		weighedAccTime += raresCount[t] / effort;
+	}
+	assert(!std::isnan(weighedAccTime));
+	assert(!std::isinf(weighedAccTime));
+	assert(0.0 <= weighedAccTime);
+	return weighedAccTime;
+}
+
+// SimulationEngineRestart::aggregate_estimates can be invoked with these types
+template
+double SimulationEngineRestart::aggregate_estimates(const std::vector<short>&,unsigned) const;
+template
+double SimulationEngineRestart::aggregate_estimates(const std::vector<int>&,unsigned) const;
+template
+double SimulationEngineRestart::aggregate_estimates(const std::vector<long>&,unsigned) const;
+template
+double SimulationEngineRestart::aggregate_estimates(const std::vector<unsigned short>&,unsigned) const;
+template
+double SimulationEngineRestart::aggregate_estimates(const std::vector<unsigned int>&,unsigned) const;
+template
+double SimulationEngineRestart::aggregate_estimates(const std::vector<unsigned long>&,unsigned) const;
+
+} // namespace fig  // // // // // // // // // // // // // // // // // // // //

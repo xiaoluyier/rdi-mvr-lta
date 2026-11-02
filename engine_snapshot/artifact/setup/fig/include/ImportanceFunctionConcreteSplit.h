@@ -1,0 +1,251 @@
+//==============================================================================
+//
+//  ImportanceFunctionConcreteSplit.h
+//
+//  Copyleft 2015-
+//  Authors:
+//  - Carlos E. Budde <cbudde@famaf.unc.edu.ar> (Universidad Nacional de Córdoba)
+//
+//------------------------------------------------------------------------------
+//
+//  This file is part of FIG.
+//
+//  The Finite Improbability Generator (FIG) project is free software;
+//  you can redistribute it and/or modify it under the terms of the GNU
+//  General Public License as published by the Free Software Foundation;
+//  either version 3 of the License, or (at your option) any later version.
+//
+//  FIG is distributed in the hope that it will be useful,
+//	but WITHOUT ANY WARRANTY; without even the implied warranty of
+//	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+//	GNU General Public License for more details.
+//
+//	You should have received a copy of the GNU General Public License
+//	along with FIG; if not, write to the Free Software Foundation,
+//	Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+//
+//==============================================================================
+
+
+#ifndef IMPORTANCEFUNCTIONCONCRETESPLIT_H
+#define IMPORTANCEFUNCTIONCONCRETESPLIT_H
+
+// C++
+#include <array>
+#include <vector>
+#include <string>
+// FIG
+#include <FigException.h>
+#include <ImportanceFunctionConcrete.h>
+
+
+namespace parser { class PropertyProjection; }  // Fwd declaration
+
+namespace fig
+{
+
+class ModuleInstance;
+class ModuleNetwork;
+
+/**
+ * @brief ImportanceFunction for the concrete importance assessment
+ *        of the ModuleInstance objects composing the ModuleNetwork.
+ *
+ *        Assesses the importance of the concrete state space of every
+ *        individual module, viz. the "split" view of the user model.
+ *        This requires access to all \ref ModuleInstance "system modules"
+ *        with their \ref State "symbolic states", namely the arrays with
+ *        the \ref Variable "variables" uniquely defined in each of them.
+ *
+ * @see ImportanceFunction
+ * @see ImportanceFunctionConcrete
+ * @see ImportanceFunctionConcreteCoupled
+ */
+class ImportanceFunctionConcreteSplit : public ImportanceFunctionConcrete
+{
+public:
+
+	/// Codes for the composition strategy of the modules importance values
+	enum CompositionType
+	{
+		SUMMATION = 0,  // m1 + m2 + ··· + mN
+		PRODUCT,        // m1 * m2 * ··· * mN
+		MAX,            // max(m1, m2, ..., mN)
+		MIN,            // min(m1, m2, ..., mN)
+		AD_HOC,         // user defined algebraic formula
+		NUM_TYPES,  // must be defined before last
+		INVALID     // must be defined last
+	};
+
+	/// Valid operands interpreted as a composition strategy
+	static const std::array< std::string, 4 > compositionOperands;
+
+private:
+
+	/// All the \ref ModuleInstance "modules" in the network
+	const std::vector< std::shared_ptr< ModuleInstance > >& modules_;
+
+	/// Number of \ref ModuleInstance "modules" in the network
+	const size_t numModules_;
+
+	/// Whether each module is relevant for importance computation
+	std::vector<bool> isRelevant_;
+
+	/// Position, in a global system state, of the first variable of each module
+	std::vector< unsigned > globalVarsIPos;
+
+	/// Temporal storage for the local importance
+	/// computed for each ("split") ModuleInstance
+	mutable ImportanceVec localValues_;
+
+	/// Copy of the local states of the system \ref ModuleInstance "modules"
+	mutable std::vector< State< STATE_INTERNAL_TYPE > > localStatesCopies_;
+
+    /// Strategy to used for composing the importance values of the modules
+    CompositionType compositionStrategy_;
+
+	/// <i>(Optional)</i> User-defined minimal value of the composition function
+    ImportanceValue userMinValue_;
+
+	/// <i>(Optional)</i> User-defined maximal value of the composition function
+    ImportanceValue userMaxValue_;
+
+    /// Value of the neutral element for the composition strategy chosen
+    ImportanceValue neutralElement_;
+
+    /// Property to check, parsed as a DNF formula
+    parser::PropertyProjection propertyClauses;
+
+    /// @copydoc ImportanceFunction::concrete_simulation()
+    bool concreteSimulation_;
+
+	/// @copydoc ModelSuite::DFTmodel
+	bool DFTmodel_;
+
+public:  // Ctor/Dtor
+
+	/// @brief Data ctor
+	/// @param model System model, whose current state is taken as initial
+	ImportanceFunctionConcreteSplit(const ModuleNetwork& model);
+
+	/// Dtor
+	virtual ~ImportanceFunctionConcreteSplit();
+
+	/// Avoid accidental copies
+	ImportanceFunctionConcreteSplit(const ImportanceFunctionConcreteSplit&) = delete;
+
+	/// Avoid accidental copies
+	ImportanceFunctionConcreteSplit&
+	operator=(const ImportanceFunctionConcreteSplit&) = delete;
+
+public:  // Accessors
+
+	/// @copydoc DFTmodel_
+	/// @see set_DFT()
+	inline bool get_DFT() { return DFTmodel_; }
+
+	inline bool concrete_simulation() const noexcept override final { return concreteSimulation_; }
+
+	inline const CompositionType& composition_type() const noexcept { return compositionStrategy_; }
+
+	/// @copydoc ImportanceFunctionConcrete::info_of()
+	/// @note <b>Complexity:</b> <i>O(size(state))</i> +
+	///                          <i>O(mu::Parser::Eval(localValues_))</i>
+	ImportanceValue info_of(const StateInstance& state) const override;
+
+	/// @copydoc ImportanceFunctionConcrete::importance_of()
+	/// @note <b>Complexity:</b> <i>O(size(state))</i> +
+	///                          <i>O(mu::Parser::Eval(localValues_))</i>
+	ImportanceValue importance_of(const StateInstance& state) const override;
+
+	/// @copydoc ImportanceFunction::print_out()
+	/// @note This overriden function ignores the second parameter \a s
+	void print_out(std::ostream& out,
+	               State<STATE_INTERNAL_TYPE> s = State<STATE_INTERNAL_TYPE>()) const override;
+
+public:  // Utils
+
+	/// @copydoc ModelSuite::set_DFT()
+	void set_DFT(bool isDFT = true);
+
+	/**
+	 * @brief Set the function to use for composing the stored importance
+	 *        values of the \ref ModuleInstance "modules".
+	 *
+	 *        Either an operand (any from compositionOperands, e.g. "max", "+")
+	 *        or a fully defined algebraic expression with explicit module names
+	 *        (e.g. "5*Queue1+Queue2") can be specified as composition function.
+	 *        The operands are associative and will be applied to all modules.
+	 *
+	 * @param compFunExpr Algebraic expression to use as composition function.
+	 * @param nullVal Neutral element of the algebraic expression, needed only
+	 *                for fully defined functions (i.e. not for operands)
+	 * @param minVal  <i>(Optional)</i> user-defined min value of the algebraic expression
+	 * @param maxVal  <i>(Optional)</i> user-defined max value of the algebraic expression
+	 *
+	 * @throw FigException if invalid or badly formatted function expression
+	 */
+	void set_composition_fun(std::string compFunExpr,
+							 const ImportanceValue& nullVal = 0u,
+							 const ImportanceValue& minVal  = 0u,
+							 const ImportanceValue& maxVal  = 0u);
+
+	void assess_importance(const Property& prop,
+						   const std::string& strategy = "flat",
+						   const PostProcessing& postProc = PostProcessing()) override;
+
+private:
+
+	/// ImportanceFunctionConcreteSplit for 'adhoc' assessment strategy is
+	/// currently unavailable
+	/// @note Useless for this class: too complicated and little rewarding.
+	///       More in detail, it'd require the user's algebraic formula
+	///       for importance computation *plus* another algebraic formula
+	///       to compose the modules importance.
+	///       Symbolic storage (i.e. ImportanceFunctionAlgebraic) is all the
+	///       'adhoc' importance assessment strategy needs. Go bother them.
+	inline void assess_importance(const Property&,
+								  const std::string&,
+								  const std::vector<std::string>&) override
+		{ throw_FigException("unavailable member function"); }
+
+private:  // Class utils
+
+	/**
+	 * Compose a composition function (pun intended) combining all modules'
+	 * importance using given (valid) algebraic operand
+	 * @param modulesNames Names of all \ref ModuleInstance "modules"
+	 * @param compOperand Algebraic operand to use
+	 * @throw FigException if 'compOperand' is not in compositionOperands
+	 * @note Updates the internal fields 'compositionStrategy_' and 'neutralElement_'
+	 * @see compositionOperands
+	 */
+	std::string compose_comp_function(
+			const std::vector<std::string>& modulesNames,
+			const std::string& compOperand);
+
+	/**
+	 * @brief Assess whether \a module is a special case and needs
+	 *        a local importance function regardless of the property query.
+	 *
+	 *        Sometimes a \ref ModuleInstance "module" is relevant for the
+	 *        global importance of the system model, but none of its variables
+	 *        appears in the property and would thus have a null local
+	 *        importance function.<br>
+	 *        This routine identifies such cases and returns the indices
+	 *        of the concrete states to be regarded as <i>rare</i> while
+	 *        assessing a local importance function for \a module.
+	 *
+	 * @param module ModuleInstance to consider for special local ifun assessment
+	 *
+	 * @return Indices identifying concrete states from \a module
+	 *         which are relevant for importance computation;
+	 *         empty vector if the module needs no local ifun
+	 */
+	Indices special_case(const ModuleInstance& module) const;
+};
+
+} // namespace fig
+
+#endif // IMPORTANCEFUNCTIONCONCRETESPLIT_H
+

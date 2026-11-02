@@ -1,0 +1,18 @@
+toplevel "TOP";
+
+"TOP" or "G_p1" "G_p2" "G_p3";
+
+"G_p1" pand "PAND_E1_E2" "E3";
+"PAND_E1_E2" pand "E1" "E2";
+
+"G_p2" pand "PAND_E2_E3" "E4";
+"PAND_E2_E3" pand "E2" "E3";
+
+"G_p3" pand "PAND_E3_E4" "E5";
+"PAND_E3_E4" pand "E3" "E4";
+
+"E1" fail~exponential(1.0e-4) repair~exponential(1.0e-12);
+"E2" fail~exponential(1.0e-4) repair~exponential(1.0e-12);
+"E3" fail~exponential(1.0e-4) repair~exponential(1.0e-12);
+"E4" fail~exponential(1.0e-4) repair~exponential(1.0e-12);
+"E5" fail~exponential(1.0e-4) repair~exponential(1.0e-12);

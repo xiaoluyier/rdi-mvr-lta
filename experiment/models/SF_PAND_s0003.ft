@@ -1,0 +1,17 @@
+toplevel "TOP";
+
+"TOP" pand "Sensor_Fault" "PAND_Inner";
+"PAND_Inner" pand "PreFilter" "MainFilter";
+
+"Sensor_Fault" or "S1" "S2" "S3" "S4";
+"PreFilter" and "F1" "F2";
+"MainFilter" or "M1" "M2";
+
+"S1" fail~exponential(3.333333333333333e-05) repair~exponential(1.0e-12);
+"S2" fail~exponential(3.333333333333333e-05) repair~exponential(1.0e-12);
+"S3" fail~exponential(3.333333333333333e-05) repair~exponential(1.0e-12);
+"S4" fail~exponential(3.333333333333333e-05) repair~exponential(1.0e-12);
+"F1" fail~exponential(3.333333333333333e-05) repair~exponential(1.0e-12);
+"F2" fail~exponential(3.333333333333333e-05) repair~exponential(1.0e-12);
+"M1" fail~exponential(3.333333333333333e-05) repair~exponential(1.0e-12);
+"M2" fail~exponential(3.333333333333333e-05) repair~exponential(1.0e-12);

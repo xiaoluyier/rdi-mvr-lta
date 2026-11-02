@@ -1,0 +1,16 @@
+toplevel "TOP";
+
+"TOP" or "G1" "G2" "G3";
+
+"G1" and "A1" "A2";
+"G2" pand "B1" "B2";
+"G3" and "C1" "C23";
+"C23" or "C2" "C3";
+
+"A1" fail~exponential(1.000000000000000e-05) repair~exponential(1.0e-12);
+"A2" fail~exponential(5.000000000000000e-06) repair~exponential(1.0e-12);
+"B1" fail~exponential(3.000000000000000e-06) repair~exponential(1.0e-12);
+"B2" fail~exponential(1.000000000000000e-05) repair~exponential(1.0e-12);
+"C1" fail~exponential(1.000000000000000e-06) repair~exponential(1.0e-12);
+"C2" fail~exponential(5.000000000000000e-06) repair~exponential(1.0e-12);
+"C3" fail~exponential(2.000000000000000e-05) repair~exponential(1.0e-12);

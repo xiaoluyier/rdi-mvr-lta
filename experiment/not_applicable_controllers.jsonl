@@ -1,0 +1,4 @@
+{"applicable": false, "controller_id": "CPS_s0030|STR", "formal_batches": [], "ifun": "STR", "model_id": "CPS_s0030", "new_confirmation_tasks": 0, "sparse_plan": {}, "status": "XIWANG_NOT_APPLICABLE_IDENTITY"}
+{"applicable": false, "controller_id": "CPS_s0030|RDI", "formal_batches": [], "ifun": "RDI", "model_id": "CPS_s0030", "new_confirmation_tasks": 0, "sparse_plan": {}, "status": "XIWANG_NOT_APPLICABLE_IDENTITY"}
+{"applicable": false, "controller_id": "CPS_s0100|STR", "formal_batches": [], "ifun": "STR", "model_id": "CPS_s0100", "new_confirmation_tasks": 0, "sparse_plan": {}, "status": "XIWANG_NOT_APPLICABLE_IDENTITY"}
+{"applicable": false, "controller_id": "CPS_s0100|RDI", "formal_batches": [], "ifun": "RDI", "model_id": "CPS_s0100", "new_confirmation_tasks": 0, "sparse_plan": {}, "status": "XIWANG_NOT_APPLICABLE_IDENTITY"}

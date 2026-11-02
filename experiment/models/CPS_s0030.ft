@@ -1,0 +1,21 @@
+toplevel "TOP";
+
+"TOP" pand "G_A" "PAND_SUB";
+"PAND_SUB" pand "G_C" "G_D";
+
+"G_A" and "A1" "A2" "A3" "A4";
+"G_C" and "C1" "C2" "C3" "C4";
+"G_D" and "D1" "D2" "D3" "D4";
+
+"A1" fail~exponential(3.333333333333333e-02) repair~exponential(1.0e-12);
+"A2" fail~exponential(3.333333333333333e-02) repair~exponential(1.0e-12);
+"A3" fail~exponential(3.333333333333333e-02) repair~exponential(1.0e-12);
+"A4" fail~exponential(3.333333333333333e-02) repair~exponential(1.0e-12);
+"C1" fail~exponential(3.333333333333333e-02) repair~exponential(1.0e-12);
+"C2" fail~exponential(3.333333333333333e-02) repair~exponential(1.0e-12);
+"C3" fail~exponential(3.333333333333333e-02) repair~exponential(1.0e-12);
+"C4" fail~exponential(3.333333333333333e-02) repair~exponential(1.0e-12);
+"D1" fail~exponential(3.333333333333333e-02) repair~exponential(1.0e-12);
+"D2" fail~exponential(3.333333333333333e-02) repair~exponential(1.0e-12);
+"D3" fail~exponential(3.333333333333333e-02) repair~exponential(1.0e-12);
+"D4" fail~exponential(3.333333333333333e-02) repair~exponential(1.0e-12);

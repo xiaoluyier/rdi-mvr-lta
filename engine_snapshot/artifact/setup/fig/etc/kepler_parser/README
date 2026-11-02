@@ -1,0 +1,10 @@
+This is the Kepler compiler, part of the FIG tool.
+
+It compiles Fault Tree files, written in the Kepler syntax, into IOSA modules that can be fed to FIG for statistical analysis.
+
+This tool is written in Python 3; its CLI entry point is the `kompilator.py` executable script. It requires the following Python 3 libraries:
+ - numpy >= 1.19.5
+ - pyeda >= 0.28.0
+ - lark >= 0.11.3
+
+The Kepler compiler was developed by Raúl E. Monti on 2021, and it is free open source software (FOSS) released under the terms of the GNU General Public License version 3.
